@@ -101,12 +101,18 @@ sub TeslaCar_Set($@)
     $rc = TeslaConnection_postrequest($hash,$URL);
   }
   if($command eq "chargeLimit") {
-    return "Need the new charge limit percentage as numeric argument (50-100)" if(int(@a) < 2);
-    $rc = TeslaConnection_setChargeLimit($hash,$a[2]);
+    my $min = ReadingsVal($hash->{NAME},"charge_limit_soc_min",50);
+    my $max = ReadingsVal($hash->{NAME},"charge_limit_soc_max",100);
+    return "Need the new charge limit percentage as numeric argument ($min-$max)"
+          if(int(@a) < 1 || $a[0]<$min || $a[0]>$max );
+    $rc = TeslaConnection_setChargeLimit($hash,$a[0]);
   }
   if($command eq "temperature") {
-    return "Need the new temperature as numeric argument" if(int(@a) < 2);
-    $rc = TeslaConnection_setTemperature($hash,$a[2]);
+    my $min = ReadingsVal($hash->{NAME},"min_avail_temp",15);
+    my $max = ReadingsVal($hash->{NAME},"max_avail_temp",28);
+    return "Need the new temperature as numeric argument"
+          if(int(@a) < 1 || $a[0]<$min || $a[0]>$max);
+    $rc = TeslaConnection_setTemperature($hash,$a[0]);
   }
   ## Connect event channel, update status
   if($command eq "init") {
@@ -167,13 +173,25 @@ sub TeslaCar_Init($)
 #####################################
 sub TeslaConnection_setChargeLimit($$)
 {
-  
+  my ($hash, $chargeLimit) = @_;
+  my $carId = $hash->{carId};
+
+  my $URL = "/api/1/vehicles/$carId/command/set_charge_limit";
+  my $rc = TeslaConnection_postdatarequest($hash,$URL,
+    "{\"percent\": $chargeLimit}");
+  return $rc;
 }
 
 #####################################
 sub TeslaConnection_setTemperature($$)
 {
+  my ($hash, $temperature) = @_;
+  my $carId = $hash->{carId};
 
+  my $URL = "/api/1/vehicles/$carId/command/set_temps";
+  my $rc = TeslaConnection_postdatarequest($hash,$URL,
+    "{\"driver_temp\": $temperature, \"passenger_temp\": $temperature}");
+  return $rc;
 }
 
 #####################################
@@ -400,12 +418,14 @@ sub TeslaCar_UpdateVehicleCallback($)
 
     #### Update Readings
     readingsBeginUpdate($hash);
-  
+
     for my $get (keys %readings) {
-      readingsBulkUpdate($hash, $get, $readings{$get}) if (
-                                $hash->{updateAllValues} || (
-#                                defined $readings{$get} &&
-                                ReadingsVal($hash->{NAME},$get,undef) ne $readings{$get}));
+      my $current = ReadingsVal($hash->{NAME},$get,undef);
+      my $setval = defined $readings{$get} ? $readings{$get} :
+        (defined $current && looks_like_number($current) ? 0: "");
+
+      readingsBulkUpdate($hash, $get, $readings{$get})
+                  if ($hash->{updateAllValues} || $current ne $setval);
     }
     readingsEndUpdate($hash, 1);
   }
@@ -657,9 +677,6 @@ sub TeslaCar_ReadEventChannel($)
     </li>
     <li>init<br>
       Refresh car connection and details, normally only used internally.
-    </li>
-    <li>requestSettings<br>
-      Read all settings available for the appliance and add them to Readings for later editing.
     </li>
   </ul>
   <br>

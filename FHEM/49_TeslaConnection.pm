@@ -93,9 +93,8 @@ sub TeslaConnection_Define($$)
 
   $hash->{STATE} = "Login necessary";
 
-  # start with a delayed token refresh
-#  setKeyValue($hash->{NAME}."_accessToken",undef);
-  InternalTimer(gettimeofday()+10, "TeslaConnection_RefreshTokenTimer", $hash, 0);
+  # start with a delayed refresh
+  InternalTimer(gettimeofday()+10, "TeslaConnection_InitDevices", $hash, 0);
 
   return;
 }
@@ -177,13 +176,13 @@ sub TeslaConnection_GetAuthToken
 #####################################
 sub TeslaConnection_RefreshToken($)
 {
-  ##########################
-  ####refresh disabled
-  return undef;
-}
-
-sub TeslaConnection_DisabledRefreshToken($)
-{
+#  ##########################
+#  ####refresh disabled
+#  return undef;
+#}
+#
+#sub TeslaConnection_DisabledRefreshToken($)
+#{
   my ($hash) = @_;
   my $name = $hash->{NAME};
 
@@ -253,7 +252,7 @@ sub TeslaConnection_DisabledRefreshToken($)
         readingsEndUpdate($conn, 1);
         RemoveInternalTimer($conn);
         InternalTimer(gettimeofday()+$json->{expires_in}*3/4,
-          "TeslaConnection_RefreshTokenTimer", $conn, 0);
+          "TeslaConnection_RefreshToken", $conn, 0);
         if (!$gotToken) {
           foreach my $key ( keys %defs ) {
             if ($defs{$key}->{TYPE} eq "TeslaCar") {
@@ -280,7 +279,7 @@ sub TeslaConnection_DisabledRefreshToken($)
     setKeyValue($hash->{NAME}."_refreshToken", undef);
   } else {
     RemoveInternalTimer($conn);
-    InternalTimer(gettimeofday()+60, "TeslaConnection_RefreshTokenTimer", $conn, 0);
+    InternalTimer(gettimeofday()+60, "TeslaConnection_RefreshToken", $conn, 0);
   }
 
   readingsBeginUpdate($hash);
@@ -340,34 +339,34 @@ sub TeslaConnection_Get($@)
 }
 
 #####################################
-sub TeslaConnection_RefreshTokenTimer($)
+sub TeslaConnection_InitDevices($)
 {
   my ($hash) = @_;
   my $name = $hash->{NAME};
 
-  Log3 $name, 3, "$name refreshing token";
+  Log3 $name, 3, "$name init token";
 
   # Token refresh seems currently non functional in Tesla Api
-  #undef $hash->{expires_at};
-  #TeslaConnection_RefreshToken($hash);
+  undef $hash->{expires_at};
+  TeslaConnection_RefreshToken($hash);
 
-  # So this is only a workaround to init the devices after a FHEM restart
-  my ($gterror, $gotToken) = getKeyValue($hash->{NAME}."_accessToken");
-  if (defined($gotToken)) {
-    $hash->{STATE} = "Connected";
-  } else {
-    $hash->{STATE} = "Login necessary";
-  }
-  readingsBeginUpdate($hash);
-  readingsBulkUpdate($hash, "state", $hash->{STATE});
-  readingsEndUpdate($hash, 1);
-  if (defined($gotToken)) {
-    foreach my $key ( keys %defs ) {
-      if ($defs{$key}->{TYPE} eq "TeslaCar") {
-        fhem "set $key init";
-      }
-    }
-  }
+  # init the devices after a FHEM restart
+#  my ($gterror, $gotToken) = getKeyValue($hash->{NAME}."_accessToken");
+#  if (defined($gotToken)) {
+#    $hash->{STATE} = "Connected";
+#  } else {
+#    $hash->{STATE} = "Login necessary";
+#  }
+#  readingsBeginUpdate($hash);
+#  readingsBulkUpdate($hash, "state", $hash->{STATE});
+#  readingsEndUpdate($hash, 1);
+#  if (defined($gotToken)) {
+#    foreach my $key ( keys %defs ) {
+#      if ($defs{$key}->{TYPE} eq "TeslaCar") {
+#        fhem "set $key init";
+#      }
+#    }
+#  }
 
 }
 
@@ -413,7 +412,7 @@ sub TeslaConnection_request
 }
 
 #####################################
-sub TeslaConnection_putrequest
+sub TeslaConnection_postdatarequest
 {
   my ($hash, $URL, $put_data) = @_;
   my $name = $hash->{NAME};
@@ -422,7 +421,7 @@ sub TeslaConnection_putrequest
 
   $URL = $api_uri . $URL;
 
-  Log3 $name, 4, "$name PUT request: $URL with data: $put_data";
+  Log3 $name, 4, "$name POST request: $URL with data: $put_data";
 
   TeslaConnection_RefreshToken($hash);
 
@@ -434,7 +433,7 @@ sub TeslaConnection_putrequest
 
   my $param = {
     url        => $URL,
-    method     => "PUT",
+    method     => "POST",
     hash       => $hash,
     timeout    => 3,
     noshutdown => 1,
@@ -448,11 +447,11 @@ sub TeslaConnection_putrequest
   my ($err, $data) = HttpUtils_BlockingGet($param);
 
   if ($err) {
-    Log3 $name, 1, "$name can't put $URL -- " . $err;
+    Log3 $name, 1, "$name can't post to $URL -- " . $err;
     return undef;
   }
 
-  Log3 $name, 4, "$name PUT response: " . $data;
+  Log3 $name, 4, "$name POST response: " . $data;
 
   return $data;
 
