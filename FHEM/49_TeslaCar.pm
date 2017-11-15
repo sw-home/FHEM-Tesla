@@ -195,69 +195,6 @@ sub TeslaConnection_setTemperature($$)
 }
 
 #####################################
-sub TeslaCar_UpdateStatus($$)
-{
-  my ($hash, $requestFullStatus) = @_;
-  my $JSON = JSON->new->utf8(0)->allow_nonref;
-
-  #### Read list of cars, find my carId
-  my $URL = "/api/1/vehicles";
-
-  my $carJson = TeslaConnection_request($hash,$URL);
-  if (!defined $carJson || $carJson eq "") {
-    return "Failed to connect to TeslaCar API, see log for details";
-  }
-
-  my $cars = $JSON->decode ($carJson);
-
-  for (my $i = 0; 1; $i++) {
-    my $car = $cars->{response}[$i];
-    if (!defined $car) { last };
-    if ($hash->{vin} eq $car->{vin}) {
-#      $hash->{option_codes} = $car->{option_codes};
-#      $hash->{color} = $car->{color};
-      $hash->{aliasname} = $car->{display_name};
-      $hash->{STATE} = $car->{state};
-      $hash->{carId} = $car->{id};
-      $hash->{vehicle_id} = $car->{vehicle_id};
-      $hash->{tokens} = $car->{tokens};
-
-      Log3 $hash->{NAME}, 4, $hash->{STATE};
-
-      #### Update State
-      if (ReadingsVal($hash->{NAME},"state",undef) ne $hash->{STATE}) {
-        readingsBeginUpdate($hash);
-        readingsBulkUpdate($hash, "state", $hash->{STATE});
-        readingsEndUpdate($hash, 1);
-        # always read all after coming online
-        if ($hash->{STATE} eq "online") {
-          $requestFullStatus = 1;
-          $hash->{updateAllValues} = 1;
-        }
-      } else {
-        $hash->{updateAllValues} = 0;
-      }
-
-      my $dataRequest = AttrVal($hash->{NAME},"dataRequest","");
-
-      if ($hash->{STATE} eq "online" && $requestFullStatus) {
-        my @names = ();
-        push @names, "vehicle_state" if (index($dataRequest, "vehicle")>-1);
-        push @names, "charge_state"  if (index($dataRequest, "charge")>-1);
-        push @names, "drive_state"   if (index($dataRequest, "drive")>-1);
-        push @names, "climate_state" if (index($dataRequest, "climate")>-1);
-        push @names, "gui_settings"  if (index($dataRequest, "gui")>-1);
-        $hash->{topics} = [@names];
-        TeslaCar_UpdateVehicleStatus($hash);
-      }
-
-      return undef;
-    }
-  }
-  return "Specified car with carId $hash->{carId} not found";
-}
-
-#####################################
 sub TeslaCar_Undef($$)
 {
    my ( $hash, $arg ) = @_;
@@ -304,16 +241,24 @@ sub TeslaCar_Timer
   my $dataRequest    = AttrVal($name, "dataRequest", "");
 
   my $speedChangeAge = gettimeofday() - time_str2num(ReadingsTimestamp($name,"speed",gettimeofday()));
+  my $stateChangeAge = gettimeofday() - time_str2num(ReadingsTimestamp($name,"state",gettimeofday()));
 
-  Log3 $hash->{NAME}, 4, "Last speed change: $speedChangeAge";
+  Log3 $hash->{NAME}, 4, "Last speed change: $speedChangeAge, last state change $stateChangeAge";
 
   $hash->{skipFull}+=$pollingTimer;
 
-  my $requestFullStatus = ($hash->{STATE} eq "online" && (  # request full status at this poll when online
-      $hash->{skipFull} > $updateTimer ||                   # and at least all $updateTimer seconds
-      ($speedChangeAge < (2*$pollingTimer) &&               # or if speed has changed between the last two polls
-      ReadingsVal($name,"speed",0) > 0))                    #    and speed is larger than 0
-      );
+  my $requestFullStatus = (
+    $hash->{STATE} eq "online" &&          # request full status at this poll when online and
+      (
+      $hash->{skipFull} >= $updateTimer ||                   # at least all $updateTimer seconds
+        (
+        ($speedChangeAge < (2*$pollingTimer) &&                     # or if speed has changed between the last two polls 
+               ReadingsVal($name,"speed",0) > 0) ||                 #       and speed is larger than 0
+        $stateChangeAge < (2*$pollingTimer) ||                      # or if state has changed between the last two polls
+        ReadingsVal($name,"charging_state","none") eq "Charging"    # or if car is charging
+        )
+      )
+    );
 
   if (defined $hash->{conn}) {
     if ($requestFullStatus && index($dataRequest, "stream") >-1) {
@@ -323,8 +268,9 @@ sub TeslaCar_Timer
     }
   }
 
-  # check if still connected
+  # if event channel is not connected
   if (!defined $hash->{conn}) {
+    # read regular api information
     my $err = TeslaCar_UpdateStatus($hash, $requestFullStatus);
     $hash->{skipStatus}=0;
     $hash->{skipFull}=0 if ($requestFullStatus);
@@ -342,6 +288,7 @@ sub TeslaCar_Timer
     InternalTimer( gettimeofday() + $streamingTimer, "TeslaCar_Timer", $hash, 0);
 
     $hash->{skipStatus}+=$streamingTimer;
+    # read regular api information in scheduled intervals
     if ($hash->{skipStatus}>=$pollingTimer) {
        TeslaCar_UpdateStatus($hash, 1);
        $hash->{skipStatus}=0;
@@ -351,11 +298,75 @@ sub TeslaCar_Timer
 }
 
 #####################################
+sub TeslaCar_UpdateStatus($$)
+{
+  my ($hash, $requestFullStatus) = @_;
+  my $JSON = JSON->new->utf8(0)->allow_nonref;
+
+  #### Read list of cars, find my carId
+  my $URL = "/api/1/vehicles";
+
+  my $carJson = TeslaConnection_request($hash,$URL);
+  if (!defined $carJson || $carJson eq "") {
+    return "Failed to connect to TeslaCar API, see log for details";
+  }
+
+  return eval {
+    my $cars = $JSON->decode ($carJson);
+
+    for (my $i = 0; 1; $i++) {
+      my $car = $cars->{response}[$i];
+      if (!defined $car) { last };
+      if ($hash->{vin} eq $car->{vin}) {
+#        $hash->{option_codes} = $car->{option_codes};
+        $hash->{aliasname}  = $car->{display_name};
+        $hash->{STATE}      = $car->{state};
+        $hash->{carId}      = $car->{id};
+        $hash->{vehicle_id} = $car->{vehicle_id};
+        $hash->{tokens}     = $car->{tokens};
+
+        Log3 $hash->{NAME}, 4, $hash->{STATE};
+
+        #### Update State
+        if (ReadingsVal($hash->{NAME},"state",undef) ne $hash->{STATE}) {
+          readingsBeginUpdate($hash);
+          readingsBulkUpdate($hash, "state", $hash->{STATE});
+          readingsEndUpdate($hash, 1);
+          # always read all data and update all values after coming online
+          if ($hash->{STATE} eq "online") {
+            $requestFullStatus = 1;
+            $hash->{updateAllValues} = 1;
+          }
+        } else {
+          $hash->{updateAllValues} = 0;
+        }
+
+        my $dataRequest = AttrVal($hash->{NAME},"dataRequest","");
+
+        if ($hash->{STATE} eq "online" && $requestFullStatus) {
+          my @names = ();
+          push @names, "vehicle_state" if (index($dataRequest, "vehicle")>-1);
+          push @names, "charge_state"  if (index($dataRequest, "charge")>-1);
+          push @names, "drive_state"   if (index($dataRequest, "drive")>-1);
+          push @names, "climate_state" if (index($dataRequest, "climate")>-1);
+          push @names, "gui_settings"  if (index($dataRequest, "gui")>-1);
+          push @names, "data"          if (index($dataRequest, "data")>-1);
+          $hash->{topics} = [@names];
+          TeslaCar_UpdateVehicleStatus($hash);
+        }
+        return undef;
+      }
+    return "Specified car with carId $hash->{carId} not found";
+    }
+  };
+}
+
+#####################################
 sub TeslaCar_UpdateVehicleStatus($)
 {
   my ($hash) = @_;
   my $carId = $hash->{carId};
-
+  my $name  = $hash->{NAME};
   my $topic = pop (@{$hash->{topics}});
   return undef if (!defined($topic));
 
@@ -373,6 +384,8 @@ sub TeslaCar_UpdateVehicleStatus($)
     timeout    => 10,
     callback   => \&TeslaCar_UpdateVehicleCallback
   };
+
+  Log3 $name, 5, "$name request: $param->{url}";
 
   HttpUtils_NonblockingGet($param);
 
@@ -394,40 +407,42 @@ sub TeslaCar_UpdateVehicleCallback($)
   elsif($data ne "") {
     Log3 $name, 5, "$name returned: $data";
 
-    my $parsed = $JSON->decode ($data);
+    eval {
+      my $parsed = $JSON->decode ($data);
 
-    foreach my $reading (keys %{$parsed->{response}}) {
-      $readings{$reading} = $parsed->{response}->{$reading};
-    }
-
-    if (defined $readings{"latitude"} && defined $readings{"longitude"}) {
-      $readings{"position"}=$readings{"latitude"} .", ".$readings{"longitude"};
-      delete $readings{"latitude"};
-      delete $readings{"longitude"};
-    }
-
-    if (defined $readings{"timestamp"}) {
-      delete $readings{"timestamp"};
-    }
-
-    foreach my $key ( @TeslaCar_ConvertToKM ) {
-      if (defined $readings{$key}) {
-        $readings{$key} *= 1.60934;
+      foreach my $reading (keys %{$parsed->{response}}) {
+        $readings{$reading} = $parsed->{response}->{$reading};
       }
-    }
 
-    #### Update Readings
-    readingsBeginUpdate($hash);
+      if (defined $readings{"latitude"} && defined $readings{"longitude"}) {
+        $readings{"position"}=$readings{"latitude"} .", ".$readings{"longitude"};
+        delete $readings{"latitude"};
+        delete $readings{"longitude"};
+      }
 
-    for my $get (keys %readings) {
-      my $current = ReadingsVal($hash->{NAME},$get,undef);
-      my $setval = defined $readings{$get} ? $readings{$get} :
-        (defined $current && looks_like_number($current) ? 0: "");
+      if (defined $readings{"timestamp"}) {
+        delete $readings{"timestamp"};
+      }
 
-      readingsBulkUpdate($hash, $get, $readings{$get})
+      foreach my $key ( @TeslaCar_ConvertToKM ) {
+        if (defined $readings{$key}) {
+          $readings{$key} *= 1.60934;
+        }
+      }
+
+      #### Update Readings
+      readingsBeginUpdate($hash);
+
+      for my $get (keys %readings) {
+        my $current = ReadingsVal($hash->{NAME},$get,undef);
+        my $setval = defined $readings{$get} ? $readings{$get} :
+          (defined $current && looks_like_number($current) ? 0: "");
+
+        readingsBulkUpdate($hash, $get, $readings{$get})
                   if ($hash->{updateAllValues} || $current ne $setval);
-    }
-    readingsEndUpdate($hash, 1);
+      }
+      readingsEndUpdate($hash, 1);
+    };
   }
   TeslaCar_UpdateVehicleStatus($hash);
   return undef;

@@ -7,3 +7,9 @@ September 28, 2017
     Update logic fixes should remove warnings
     Implemented setting temperature and charge limits
 
+November 15, 2017
+
+	Improvements
+	-add data endpoint
+	-improve timing when charging
+	-fix crash on api error messages
