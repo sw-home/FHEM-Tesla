@@ -3,14 +3,21 @@
 
 # $Id: $
 
-        Version 0.1
+        Version 0.9
 
 =head1 SYNOPSIS
         Tesla Motors Modul for FHEM
         contributed by Stefan Willmeroth 07/2017
 
+        Get started by defining a TeslaConnection and search your cars:
+        define teslaconn TeslaConnection
+        set teslaconn scanCars
+
+        Use my referral code to get unlimited supercharging for
+        your new Tesla: http://ts.la/stefan1473
+
 =head1 DESCRIPTION
-        49_TeslaCar handle individual cars defines by
+        49_TeslaCar handles individual cars defines by
         49_TeslaConnection
 
 =head1 AUTHOR - Stefan Willmeroth
@@ -210,23 +217,7 @@ sub TeslaCar_Get($@)
 {
   my ($hash, @args) = @_;
 
-  return 'TeslaCar_Get needs two arguments' if (@args != 2);
-
-  my $get = $args[1];
-  my $val = $hash->{Invalid};
-
-#  if (defined($hash->{READINGS}{$get})) {
-#    $val = $hash->{READINGS}{$get}{VAL};
-#  } else {
-#    my @cList = keys ($hash->{READINGS});
-#    return "TeslaCar_Get: no such reading: $get, choose one of " . join(" ", @cList);
-#  }
-
-  return "TeslaCar_Get: no such reading: $get, choose one of dummy";
-
-  Log3 $hash->{NAME}, 3, "$args[0] $get => $val";
-
-  return $val;
+  return "TeslaCar_Get not supported";
 }
 
 #####################################
@@ -252,10 +243,9 @@ sub TeslaCar_Timer
       (
       $hash->{skipFull} >= $updateTimer ||                   # at least all $updateTimer seconds
         (
-        ($speedChangeAge < (2*$pollingTimer) &&                     # or if speed has changed between the last two polls 
-               ReadingsVal($name,"speed",0) > 0) ||                 #       and speed is larger than 0
-        $stateChangeAge < (2*$pollingTimer) ||                      # or if state has changed between the last two polls
-        ReadingsVal($name,"charging_state","none") eq "Charging"    # or if car is charging
+        $speedChangeAge < (2*$pollingTimer) ||                    # or if speed has changed between the last two polls
+        $stateChangeAge < (2*$pollingTimer) ||                    # or if state has changed between the last two polls
+        ReadingsVal($name,"charging_state","none") eq "Charging"  # or if car is charging
         )
       )
     );

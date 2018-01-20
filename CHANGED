@@ -13,3 +13,8 @@ November 15, 2017
 	-add data endpoint
 	-improve timing when charging
 	-fix crash on api error messages
+
+January 20, 2018
+
+	- fixed bug when refreshing token
+	- do not slow data refresh if speed is 0

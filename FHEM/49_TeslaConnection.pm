@@ -3,11 +3,18 @@
 
 # $Id: $
 
-        Version 0.1
+        Version 0.9
 
 =head1 SYNOPSIS
         Tesla Motors Modul for FHEM
         contributed by Stefan Willmeroth 07/2017
+        
+        Get started by defining a TeslaConnection and search your cars: 
+        define teslaconn TeslaConnection
+        set teslaconn scanCars
+
+        Use my referral code to get unlimited supercharging for 
+        your new Tesla: http://ts.la/stefan1473
 
 =head1 DESCRIPTION
         49_TeslaConnection keeps the logon token needed by devices defined by
@@ -94,7 +101,8 @@ sub TeslaConnection_Define($$)
   $hash->{STATE} = "Login necessary";
 
   # start with a delayed refresh
-  InternalTimer(gettimeofday()+10, "TeslaConnection_InitDevices", $hash, 0);
+  setKeyValue($hash->{NAME}."_accessToken",undef);
+  InternalTimer(gettimeofday()+10, "TeslaConnection_RefreshToken", $hash, 0);
 
   return;
 }
@@ -134,55 +142,49 @@ sub TeslaConnection_GetAuthToken
     }
   }
 
-  my $json = $JSON->decode($data);
+  eval {  
+    my $json = $JSON->decode($data);
 
-  if( $json->{error} ) {
-    $hash->{lastError} = $json->{error};
-  }
-
-  setKeyValue($hash->{NAME}."_accessToken",$json->{access_token});
-  setKeyValue($hash->{NAME}."_refreshToken", $json->{refresh_token});
-
-  if( $json->{access_token} ) {
-    $hash->{STATE} = "Connected";
-    readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, "state", $hash->{STATE});
-
-    ($hash->{expires_at}) = gettimeofday();
-    $hash->{expires_at} += $json->{expires_in};
-    $hash->{username} = $user;
-
-    readingsBulkUpdate($hash, "tokenExpiry", scalar localtime $hash->{expires_at});
-    readingsEndUpdate($hash, 1);
-
-    foreach my $key ( keys %defs ) {
-      if (($defs{$key}->{TYPE} eq "TeslaCar") && ($defs{$key}->{teslaconn} eq $hash->{NAME})) {
-        fhem "set $key init";
-      }
+    if( $json->{error} ) {
+      $hash->{lastError} = $json->{error};
     }
+  
+    setKeyValue($hash->{NAME}."_accessToken",$json->{access_token});
+    setKeyValue($hash->{NAME}."_refreshToken", $json->{refresh_token});
 
-    RemoveInternalTimer($hash);
-    InternalTimer(gettimeofday()+$json->{expires_in}*3/4,
-      "TeslaConnection_RefreshTokenTimer", $hash, 0);
-    return undef;
-  } else {
-    $hash->{STATE} = "Error";
-    readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, "state", $hash->{STATE});
-    readingsEndUpdate($hash, 1);
-  }
+    if( $json->{access_token} ) {
+      $hash->{STATE} = "Connected";
+      readingsBeginUpdate($hash);
+      readingsBulkUpdate($hash, "state", $hash->{STATE});
+
+      ($hash->{expires_at}) = gettimeofday();
+      $hash->{expires_at} += $json->{expires_in};
+      $hash->{username} = $user;
+
+      readingsBulkUpdate($hash, "tokenExpiry", scalar localtime $hash->{expires_at});
+      readingsEndUpdate($hash, 1);
+
+      foreach my $key ( keys %defs ) {
+        if (($defs{$key}->{TYPE} eq "TeslaCar") && ($defs{$key}->{teslaconn} eq $hash->{NAME})) {
+          fhem "set $key init";
+        }
+      }
+
+      RemoveInternalTimer($hash);
+      InternalTimer(gettimeofday()+$json->{expires_in}*3/4,
+        "TeslaConnection_RefreshToken", $hash, 0);
+      return undef;
+    }
+  };
+  $hash->{STATE} = "Error";
+  readingsBeginUpdate($hash);
+  readingsBulkUpdate($hash, "state", $hash->{STATE});
+  readingsEndUpdate($hash, 1);
 }
 
 #####################################
 sub TeslaConnection_RefreshToken($)
 {
-#  ##########################
-#  ####refresh disabled
-#  return undef;
-#}
-#
-#sub TeslaConnection_DisabledRefreshToken($)
-#{
   my ($hash) = @_;
   my $name = $hash->{NAME};
 
@@ -335,38 +337,6 @@ sub TeslaConnection_Get($@)
   my $val = $hash->{Invalid};
 
   return "TeslaConnection_Get: no such reading: $get";
-
-}
-
-#####################################
-sub TeslaConnection_InitDevices($)
-{
-  my ($hash) = @_;
-  my $name = $hash->{NAME};
-
-  Log3 $name, 3, "$name init token";
-
-  # Token refresh seems currently non functional in Tesla Api
-  undef $hash->{expires_at};
-  TeslaConnection_RefreshToken($hash);
-
-  # init the devices after a FHEM restart
-#  my ($gterror, $gotToken) = getKeyValue($hash->{NAME}."_accessToken");
-#  if (defined($gotToken)) {
-#    $hash->{STATE} = "Connected";
-#  } else {
-#    $hash->{STATE} = "Login necessary";
-#  }
-#  readingsBeginUpdate($hash);
-#  readingsBulkUpdate($hash, "state", $hash->{STATE});
-#  readingsEndUpdate($hash, 1);
-#  if (defined($gotToken)) {
-#    foreach my $key ( keys %defs ) {
-#      if ($defs{$key}->{TYPE} eq "TeslaCar") {
-#        fhem "set $key init";
-#      }
-#    }
-#  }
 
 }
 
