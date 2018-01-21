@@ -301,9 +301,10 @@ sub TeslaCar_UpdateStatus($$)
     return "Failed to connect to TeslaCar API, see log for details";
   }
 
-  return eval {
-    my $cars = $JSON->decode ($carJson);
-
+  my $cars = eval {$JSON->decode ($carJson)};
+  if($@){
+    Log3 $hash->{NAME}, 3, "$hash->{NAME} - JSON error requesting vehicles: $@";
+  } else {
     for (my $i = 0; 1; $i++) {
       my $car = $cars->{response}[$i];
       if (!defined $car) { last };
@@ -348,7 +349,7 @@ sub TeslaCar_UpdateStatus($$)
       }
     return "Specified car with carId $hash->{carId} not found";
     }
-  };
+  }
 }
 
 #####################################
@@ -397,8 +398,12 @@ sub TeslaCar_UpdateVehicleCallback($)
   elsif($data ne "") {
     Log3 $name, 5, "$name returned: $data";
 
-    eval {
-      my $parsed = $JSON->decode ($data);
+    my $parsed = eval {$JSON->decode ($data)};
+    if($@){
+
+      Log3 $hash->{NAME}, 3, "$hash->{NAME} - JSON error requesting data: $@";
+
+    } else {
 
       foreach my $reading (keys %{$parsed->{response}}) {
         $readings{$reading} = $parsed->{response}->{$reading};
@@ -432,7 +437,7 @@ sub TeslaCar_UpdateVehicleCallback($)
                   if ($hash->{updateAllValues} || $current ne $setval);
       }
       readingsEndUpdate($hash, 1);
-    };
+    }
   }
   TeslaCar_UpdateVehicleStatus($hash);
   return undef;

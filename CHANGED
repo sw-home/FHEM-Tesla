@@ -18,3 +18,7 @@ January 20, 2018
 
 	- fixed bug when refreshing token
 	- do not slow data refresh if speed is 0
+
+January 21, 2018
+	
+	- fix error handling decoding json strings
