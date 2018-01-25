@@ -234,39 +234,43 @@ sub TeslaConnection_RefreshToken($)
       Log3 $name, 2, "$name: invalid json detected: >>$data<<";
 
     } else {
+      my $json = eval {decode_json($data)};
+      if($@){
+        Log3 $name, 2, "$name JSON error while reading refreshed token";
+      } else {
 
-      my $json = decode_json($data);
-
-      if( $json->{error} ) {
-        $hash->{lastError} = $json->{error};
-      }
-
-      setKeyValue($conn->{NAME}."_accessToken",$json->{access_token});
-
-      if( $json->{access_token} ) {
-        $conn->{STATE} = "Connected";
-        $conn->{expires_at} = gettimeofday();
-        $conn->{expires_at} += $json->{expires_in};
-        undef $conn->{refreshFailCount};
-        readingsBeginUpdate($conn);
-        readingsBulkUpdate($conn, "tokenExpiry", scalar localtime $conn->{expires_at});
-        readingsBulkUpdate($conn, "state", $conn->{STATE});
-        readingsEndUpdate($conn, 1);
-        RemoveInternalTimer($conn);
-        InternalTimer(gettimeofday()+$json->{expires_in}*3/4,
-          "TeslaConnection_RefreshToken", $conn, 0);
-        if (!$gotToken) {
-          foreach my $key ( keys %defs ) {
-            if ($defs{$key}->{TYPE} eq "TeslaCar") {
-              fhem "set $key init";
+        if( $json->{error} ) {
+          $hash->{lastError} = $json->{error};
+        }
+  
+        setKeyValue($conn->{NAME}."_accessToken",  $json->{access_token});
+        setKeyValue($conn->{NAME}."_refreshToken", $json->{refresh_token});
+  
+        if( $json->{access_token} ) {
+          $conn->{STATE} = "Connected";
+          $conn->{expires_at} = gettimeofday();
+          $conn->{expires_at} += $json->{expires_in};
+          undef $conn->{refreshFailCount};
+          readingsBeginUpdate($conn);
+          readingsBulkUpdate($conn, "tokenExpiry", scalar localtime $conn->{expires_at});
+          readingsBulkUpdate($conn, "state", $conn->{STATE});
+          readingsEndUpdate($conn, 1);
+          RemoveInternalTimer($conn);
+          InternalTimer(gettimeofday()+$json->{expires_in}*3/4,
+            "TeslaConnection_RefreshToken", $conn, 0);
+          if (!$gotToken) {
+            foreach my $key ( keys %defs ) {
+              if ($defs{$key}->{TYPE} eq "TeslaCar") {
+                fhem "set $key init";
+              }
             }
           }
+          return undef;
         }
-        return undef;
       }
     }
   }
-
+  
   $conn->{STATE} = "Refresh Error" ;
 
   if (defined $conn->{refreshFailCount}) {

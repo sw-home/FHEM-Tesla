@@ -22,3 +22,7 @@ January 20, 2018
 January 21, 2018
 	
 	- fix error handling decoding json strings
+
+January 25, 2018
+	
+	- fix handling of refresh token
