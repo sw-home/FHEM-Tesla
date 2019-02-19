@@ -142,8 +142,11 @@ sub TeslaConnection_GetAuthToken
     }
   }
 
-  eval {  
-    my $json = $JSON->decode($data);
+   my $json = eval {$JSON->decode($data)};
+   if($@){
+     Log3 $hash->{NAME}, 2, "JSON error while reading token response";
+
+   } else {  
 
     if( $json->{error} ) {
       $hash->{lastError} = $json->{error};
@@ -175,7 +178,7 @@ sub TeslaConnection_GetAuthToken
         "TeslaConnection_RefreshToken", $hash, 0);
       return undef;
     }
-  };
+  }
   $hash->{STATE} = "Error";
   readingsBeginUpdate($hash);
   readingsBulkUpdate($hash, "state", $hash->{STATE});

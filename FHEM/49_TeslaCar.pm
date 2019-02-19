@@ -3,7 +3,7 @@
 
 # $Id: $
 
-        Version 0.9
+        Version 1.0
 
 =head1 SYNOPSIS
         Tesla Motors Modul for FHEM
@@ -43,6 +43,11 @@ my @TeslaCar_ConvertToKM = (
   "speed","odometer","battery_range","est_battery_range","ideal_battery_range"
 );
 
+my @TeslaCar_Data_Nodes = (
+  "drive_state","vehicle_state","vehicle_config","charge_state","drive_state",
+  "climate_state","gui_settings"
+);
+
 ##############################################
 sub TeslaCar_Initialize($)
 {
@@ -51,7 +56,7 @@ sub TeslaCar_Initialize($)
   $hash->{SetFn}     = "TeslaCar_Set";
   $hash->{DefFn}     = "TeslaCar_Define";
   $hash->{GetFn}     = "TeslaCar_Get";
-  $hash->{AttrList}  = "updateTimer pollingTimer streamingTimer dataRequest";
+  $hash->{AttrList}  = "updateTimer pollingTimer streamingTimer dataRequest stateFormat";
 }
 
 ###################################
@@ -68,7 +73,7 @@ sub TeslaCar_Set($@)
   if (Value($hash->{teslaconn}) ne "Connected") {
     $availableCmds = "not logged in";
   } else {
-    $availableCmds ="init requestSettings wakeUpCar chargeLimit startCharging stopCharging flashLights honkHorn temperature startHvacSystem stopHvacSystem";
+    $availableCmds ="init requestSettings wakeUpCar charge_limit_soc startCharging stopCharging flashLights honkHorn temperature startHvacSystem stopHvacSystem";
   }
 
   return "no set value specified" if(int(@a) < 2);
@@ -107,7 +112,7 @@ sub TeslaCar_Set($@)
     my $URL = "/api/1/vehicles/$carId/command/auto_conditioning_stop";
     $rc = TeslaConnection_postrequest($hash,$URL);
   }
-  if($command eq "chargeLimit") {
+  if($command eq "charge_limit_soc") {
     my $min = ReadingsVal($hash->{NAME},"charge_limit_soc_min",50);
     my $max = ReadingsVal($hash->{NAME},"charge_limit_soc_max",100);
     return "Need the new charge limit percentage as numeric argument ($min-$max)"
@@ -152,7 +157,7 @@ sub TeslaCar_Define($$)
 
   #### Some first time setup stuff
   $attr{$hash->{NAME}}{alias} = $hash->{aliasname} if (!defined $attr{$hash->{NAME}}{alias} && defined $hash->{aliasname});
-  $attr{$hash->{NAME}}{dataRequest} = "stream vehicle charge drive climate gui" if (!defined $attr{$hash->{NAME}}{dataRequest});
+  $attr{$hash->{NAME}}{dataRequest} = "data" if (!defined $attr{$hash->{NAME}}{dataRequest});
   $attr{$hash->{NAME}}{pollingTimer} = "60" if (!defined $attr{$hash->{NAME}}{pollingTimer});
   $attr{$hash->{NAME}}{updateTimer} = "600" if (!defined $attr{$hash->{NAME}}{updateTimer});
   $attr{$hash->{NAME}}{streamingTimer} = "1" if (!defined $attr{$hash->{NAME}}{streamingTimer});
@@ -231,20 +236,20 @@ sub TeslaCar_Timer
   my $streamingTimer = AttrVal($name, "streamingTimer", 1);
   my $dataRequest    = AttrVal($name, "dataRequest", "");
 
-  my $speedChangeAge = gettimeofday() - time_str2num(ReadingsTimestamp($name,"speed",gettimeofday()));
-  my $stateChangeAge = gettimeofday() - time_str2num(ReadingsTimestamp($name,"state",gettimeofday()));
+  my $odometerChangeAge = gettimeofday() - time_str2num(ReadingsTimestamp($name,"odometer",gettimeofday()));
+  my $stateChangeAge    = gettimeofday() - time_str2num(ReadingsTimestamp($name,"state",gettimeofday()));
 
-  Log3 $hash->{NAME}, 4, "Last speed change: $speedChangeAge, last state change $stateChangeAge";
+  Log3 $hash->{NAME}, 4, "Last odometer change: $odometerChangeAge, last state change $stateChangeAge";
 
   $hash->{skipFull}+=$pollingTimer;
 
   my $requestFullStatus = (
-    $hash->{STATE} eq "online" &&          # request full status at this poll when online and
+    ReadingsVal($name,"state",undef) eq "online" &&          # request full status at this poll when online and
       (
       $hash->{skipFull} >= $updateTimer ||                   # at least all $updateTimer seconds
         (
-        $speedChangeAge < (2*$pollingTimer) ||                    # or if speed has changed between the last two polls
-        $stateChangeAge < (2*$pollingTimer) ||                    # or if state has changed between the last two polls
+        $odometerChangeAge < (3*$pollingTimer) ||                 # or if speed has changed between the last three polls
+        $stateChangeAge < (3*$pollingTimer) ||                    # or if state has changed between the last three polls
         ReadingsVal($name,"charging_state","none") eq "Charging"  # or if car is charging
         )
       )
@@ -311,7 +316,6 @@ sub TeslaCar_UpdateStatus($$)
       if ($hash->{vin} eq $car->{vin}) {
 #        $hash->{option_codes} = $car->{option_codes};
         $hash->{aliasname}  = $car->{display_name};
-        $hash->{STATE}      = $car->{state};
         $hash->{carId}      = $car->{id};
         $hash->{vehicle_id} = $car->{vehicle_id};
         $hash->{tokens}     = $car->{tokens};
@@ -319,12 +323,12 @@ sub TeslaCar_UpdateStatus($$)
         Log3 $hash->{NAME}, 4, $hash->{STATE};
 
         #### Update State
-        if (ReadingsVal($hash->{NAME},"state",undef) ne $hash->{STATE}) {
+        if (ReadingsVal($hash->{NAME},"state",undef) ne $car->{state}) {
           readingsBeginUpdate($hash);
-          readingsBulkUpdate($hash, "state", $hash->{STATE});
+          readingsBulkUpdate($hash, "state", $car->{state});
           readingsEndUpdate($hash, 1);
           # always read all data and update all values after coming online
-          if ($hash->{STATE} eq "online") {
+          if ($car->{state} eq "online") {
             $requestFullStatus = 1;
             $hash->{updateAllValues} = 1;
           }
@@ -334,14 +338,15 @@ sub TeslaCar_UpdateStatus($$)
 
         my $dataRequest = AttrVal($hash->{NAME},"dataRequest","");
 
-        if ($hash->{STATE} eq "online" && $requestFullStatus) {
+        if ($car->{state} eq "online" && $requestFullStatus) {
           my @names = ();
-          push @names, "vehicle_state" if (index($dataRequest, "vehicle")>-1);
-          push @names, "charge_state"  if (index($dataRequest, "charge")>-1);
-          push @names, "drive_state"   if (index($dataRequest, "drive")>-1);
-          push @names, "climate_state" if (index($dataRequest, "climate")>-1);
-          push @names, "gui_settings"  if (index($dataRequest, "gui")>-1);
-          push @names, "data"          if (index($dataRequest, "data")>-1);
+          push @names, "vehicle_data"                if (index($dataRequest, "data")>-1);
+          push @names, "data_request/vehicle_state"  if (index($dataRequest, "vehicle")>-1);
+          push @names, "data_request/charge_state"   if (index($dataRequest, "charge")>-1);
+          push @names, "data_request/drive_state"    if (index($dataRequest, "drive")>-1);
+          push @names, "data_request/climate_state"  if (index($dataRequest, "climate")>-1);
+          push @names, "data_request/gui_settings"   if (index($dataRequest, "gui")>-1);
+          push @names, "data_request/vehicle_config" if (index($dataRequest, "config")>-1);
           $hash->{topics} = [@names];
           TeslaCar_UpdateVehicleStatus($hash);
         }
@@ -369,7 +374,7 @@ sub TeslaCar_UpdateVehicleStatus($)
 
   #### Get status variables
   my $param = {
-    url        => $api_uri . "/api/1/vehicles/$carId/data_request/$topic",
+    url        => $api_uri . "/api/1/vehicles/$carId/$topic",
     hash       => $hash,
     header     => { "Accept" => "application/json", "Authorization" => "Bearer $token" },
     timeout    => 10,
@@ -406,7 +411,14 @@ sub TeslaCar_UpdateVehicleCallback($)
     } else {
 
       foreach my $reading (keys %{$parsed->{response}}) {
-        $readings{$reading} = $parsed->{response}->{$reading};
+        if (grep( /^$reading$/, @TeslaCar_Data_Nodes)) {
+          foreach my $subreading (keys %{$parsed->{response}->{$reading}}) {
+            $readings{$subreading} = $parsed->{response}->{$reading}->{$subreading};
+          }
+        }
+        else {
+          $readings{$reading} = $parsed->{response}->{$reading};
+        }
       }
 
       if (defined $readings{"latitude"} && defined $readings{"longitude"}) {
@@ -419,10 +431,25 @@ sub TeslaCar_UpdateVehicleCallback($)
         delete $readings{"timestamp"};
       }
 
+      if (defined $readings{"tokens"}) {
+        delete $readings{"tokens"};
+      }
+
       foreach my $key ( @TeslaCar_ConvertToKM ) {
         if (defined $readings{$key}) {
           $readings{$key} *= 1.60934;
         }
+      }
+
+      if (defined $readings{"speed"}) {
+        $readings{"speed"} = 0 + $readings{"speed"};
+      }
+
+      if (defined $readings{"software_update"}) {
+        foreach my $subreading (keys %{$readings{"software_update"}}) {
+          $readings{$subreading} = $readings{"software_update"}->{$subreading};
+        }
+        delete $readings{"software_update"};
       }
 
       #### Update Readings
@@ -677,7 +704,7 @@ sub TeslaCar_ReadEventChannel($)
     <li>stopHvacSystem<br>
       If the car is in state 'online', it will stop the air conditioning system
     </li>
-    <li>chargeLimit<br>
+    <li>charge_limit_soc<br>
       If the car is in state 'online', you can set the charge limit.
       Needs the new charge limit percentage as numeric argument (50-100)
     </li>
@@ -695,8 +722,10 @@ sub TeslaCar_ReadEventChannel($)
   <h4>Attributes</h4>
   <ul>
     <li><a name="dataRequest"><code>attr &lt;name&gt; dataRequest &lt;String&gt;</code></a>
-    <br />Data items to collect from Tesla API, the list can contain any of "stream vehicle charge drive climate gui"
+    <br />Data items to collect from Tesla API, the list can contain any combination of
+    <br />"data","stream","vehicle","charge","drive","climate","gui"
     <br />The "stream" support is experimental and will produce a huge amount of update if the vehicle is moving.
+    <br />The "data" item contains all information of vehicle, charge, drive, climate and gui
     </li>
     <li><a name="updateTimer"><code>attr &lt;name&gt; updateTimer &lt;Integer&gt;</code></a>
                 <br />Interval for checking if the car is online, default is 1 minute</li>
