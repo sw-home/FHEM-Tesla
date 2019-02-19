@@ -26,3 +26,11 @@ January 21, 2018
 January 25, 2018
 	
 	- fix handling of refresh token
+
+January 30, 2019
+
+	- enable stateFormat attribute
+	- renamed chargeLimit reading to charge_limit_soc to improve changing via UI
+	- add new API data request item "data" which includes everything from the older items vehicle charge drive climate gui in one request
+	- improve polling to support car sleep mode / wakeup
+
