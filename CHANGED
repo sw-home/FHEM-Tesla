@@ -34,3 +34,7 @@ January 30, 2019
 	- add new API data request item "data" which includes everything from the older items vehicle charge drive climate gui in one request
 	- improve polling to support car sleep mode / wakeup
 
+April 16, 2019
+
+	- Fix bug when account had several cars
+	- Correct documentation of attributes

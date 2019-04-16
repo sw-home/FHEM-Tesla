@@ -143,7 +143,7 @@ sub TeslaCar_Define($$)
   my ($hash, $def) = @_;
   my @a = split("[ \t][ \t]*", $def);
 
-  my $u = "wrong syntax: define <dev-name> TeslaCar <conn-name> <carId> to add appliances";
+  my $u = "wrong syntax: define <dev-name> TeslaCar <conn-name> <vin> to add a new car";
 
   return $u if(int(@a) < 4);
 
@@ -161,7 +161,6 @@ sub TeslaCar_Define($$)
   $attr{$hash->{NAME}}{pollingTimer} = "60" if (!defined $attr{$hash->{NAME}}{pollingTimer});
   $attr{$hash->{NAME}}{updateTimer} = "600" if (!defined $attr{$hash->{NAME}}{updateTimer});
   $attr{$hash->{NAME}}{streamingTimer} = "1" if (!defined $attr{$hash->{NAME}}{streamingTimer});
-#     $attr{$hash->{NAME}}{webCmd} = "startProgram:stopProgram" if (!defined $attr{$hash->{NAME}}{webCmd});
 
   Log3 $hash->{NAME}, 2, "$hash->{NAME} defined as TeslaCar $hash->{vin}" if !defined($err);
   return $err;
@@ -352,8 +351,8 @@ sub TeslaCar_UpdateStatus($$)
         }
         return undef;
       }
-    return "Specified car with carId $hash->{carId} not found";
     }
+    return "Specified car with VIN $hash->{vin} not found";
   }
 }
 
@@ -727,9 +726,9 @@ sub TeslaCar_ReadEventChannel($)
     <br />The "stream" support is experimental and will produce a huge amount of update if the vehicle is moving.
     <br />The "data" item contains all information of vehicle, charge, drive, climate and gui
     </li>
-    <li><a name="updateTimer"><code>attr &lt;name&gt; updateTimer &lt;Integer&gt;</code></a>
-                <br />Interval for checking if the car is online, default is 1 minute</li>
     <li><a name="pollingTimer"><code>attr &lt;name&gt; pollingTimer &lt;Integer&gt;</code></a>
+                <br />Interval for checking if the car is online, default is 1 minute</li>
+    <li><a name="updateTimer"><code>attr &lt;name&gt; updateTimer &lt;Integer&gt;</code></a>
                 <br />Interval for updating car data if it is not moving, default is 10 minutes</li>
     <li><a name="streamingTimer"><code>attr &lt;name&gt; streamingTimer &lt;Integer&gt;</code></a>
                 <br />Interval reading stream updates, default is 1 second</li>

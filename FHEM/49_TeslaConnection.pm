@@ -302,7 +302,7 @@ sub TeslaConnection_AutocreateDevices
 {
   my ($hash) = @_;
 
-  #### Read list of appliances
+  #### Read list of vehicles
   my $URL = "/api/1/vehicles";
 
   my $carJson = TeslaConnection_request($hash,$URL);
