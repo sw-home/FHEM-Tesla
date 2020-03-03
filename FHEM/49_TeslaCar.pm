@@ -73,7 +73,7 @@ sub TeslaCar_Set($@)
   if (Value($hash->{teslaconn}) ne "Connected") {
     $availableCmds = "not logged in";
   } else {
-    $availableCmds ="init requestSettings wakeUpCar charge_limit_soc startCharging stopCharging flashLights honkHorn temperature startHvacSystem stopHvacSystem";
+    $availableCmds ="init requestSettings wakeUpCar charge_limit_soc startCharging stopCharging flashLights honkHorn temperature startHvacSystem stopHvacSystem startDefrost";
   }
 
   return "no set value specified" if(int(@a) < 2);
@@ -111,6 +111,10 @@ sub TeslaCar_Set($@)
   if($command eq "stopHvacSystem") {
     my $URL = "/api/1/vehicles/$carId/command/auto_conditioning_stop";
     $rc = TeslaConnection_postrequest($hash,$URL);
+  }
+  if($command eq "startDefrost") {
+    my $URL = "/api/1/vehicles/$carId/command/set_preconditioning_max";
+    $rc = TeslaConnection_postdatarequest($hash,$URL,"{\"on\": true}");
   }
   if($command eq "charge_limit_soc") {
     my $min = ReadingsVal($hash->{NAME},"charge_limit_soc_min",50);
