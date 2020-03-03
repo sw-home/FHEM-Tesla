@@ -707,6 +707,9 @@ sub TeslaCar_ReadEventChannel($)
     <li>stopHvacSystem<br>
       If the car is in state 'online', it will stop the air conditioning system
     </li>
+    <li>startDefrost<br>
+      If the car is in state 'online', it will set the climate controls to Max Defrost
+    </li>
     <li>charge_limit_soc<br>
       If the car is in state 'online', you can set the charge limit.
       Needs the new charge limit percentage as numeric argument (50-100)
