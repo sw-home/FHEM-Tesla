@@ -38,3 +38,14 @@ April 16, 2019
 
 	- Fix bug when account had several cars
 	- Correct documentation of attributes
+
+March 3, 2020
+
+	- Added vehicle command startDefrost
+
+August 17, 2020
+
+	- Code cleanup
+	- Removed streaming support and multiple endpoint support for simplicity's sake
+	- Fixed Perl Warnings
+
