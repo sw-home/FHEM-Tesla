@@ -38,3 +38,8 @@ April 16, 2019
 
 	- Fix bug when account had several cars
 	- Correct documentation of attributes
+
+August 17, 2020
+	- Code cleanup
+	- Removed streaming support and multiple endpoint support for simplicity's sake
+	- Fixed Perl Warnings
