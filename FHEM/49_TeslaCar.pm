@@ -73,7 +73,7 @@ sub TeslaCar_Set($@)
   if (Value($hash->{teslaconn}) ne "Connected") {
     $availableCmds = "not logged in";
   } else {
-    $availableCmds ="init requestSettings wakeUpCar charge_limit_soc startCharging stopCharging flashLights honkHorn temperature startHvacSystem stopHvacSystem startDefrost";
+    $availableCmds ="init requestSettings wakeUpCar charge_limit_soc startCharging stopCharging flashLights honkHorn temperature openChargePort startHvacSystem stopHvacSystem startDefrost";
   }
 
   return "no set value specified" if(int(@a) < 2);
@@ -129,6 +129,10 @@ sub TeslaCar_Set($@)
     return "Need the new temperature as numeric argument ($min-$max)"
           if(int(@a) < 1 || $a[0]<$min || $a[0]>$max);
     $rc = TeslaConnection_setTemperature($hash,$a[0]);
+  }
+  if($command eq "openChargePort") {
+    my $URL = "/api/1/vehicles/$carId/command/charge_port_door_open";
+    $rc = TeslaConnection_postdatarequest($hash,$URL);
   }
   ## Connect event channel, update status
   if($command eq "init") {
@@ -473,6 +477,9 @@ sub TeslaCar_UpdateVehicleCallback($)
     <li>temperature<br>
       If the car is in state 'online', you can set the interior temperature for air conditioning
       Needs the new temperature as numeric argument
+    </li>
+    <li>openChargePort<br>
+      If the car is in state 'online', you can open the charge port or, if attached, unlock the cable
     </li>
     <li>init<br>
       Refresh car connection and details, normally only used internally.
