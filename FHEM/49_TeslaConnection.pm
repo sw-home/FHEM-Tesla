@@ -3,7 +3,7 @@
 
 # $Id: $
 
-        Version 0.9
+        Version 1.1
 
 =head1 SYNOPSIS
         Tesla Motors Modul for FHEM
@@ -13,26 +13,26 @@
         define teslaconn TeslaConnection
         set teslaconn scanCars
 
-        Use my referral code to get unlimited supercharging for 
-        your new Tesla: http://ts.la/stefan1473
-
 =head1 DESCRIPTION
         49_TeslaConnection keeps the logon token needed by devices defined by
         49_TeslaCar
 
 =head1 AUTHOR - Stefan Willmeroth
         swi@willmeroth.com (forum.fhem.de)
+        Forked by Timo Dostal and Jaykoert all credits goes to Stefan Willmeroth & mrmops
+        2022-04-17 Oliver Vallant adapted to TESLA's new refresh/accessToken handling
 =cut
 
 package main;
 
 use strict;
 use warnings;
+use HttpUtils;
 use JSON;
 use URI::Escape;
 use Switch;
 use Data::Dumper; #debugging
-require 'HttpUtils.pm';
+
 
 ##############################################
 sub TeslaConnection_Initialize($)
@@ -42,39 +42,53 @@ sub TeslaConnection_Initialize($)
   $hash->{SetFn}        = "TeslaConnection_Set";
   $hash->{DefFn}        = "TeslaConnection_Define";
   $hash->{GetFn}        = "TeslaConnection_Get";
+  $hash->{AttrList}     = "RefreshToken";
+
+  $attr{$hash->{NAME}}{RefreshToken} = "NeedsToBeDefined" if (!defined $attr{$hash->{NAME}}{RefreshToken});
+
 }
 
 ###################################
 sub TeslaConnection_Set($@)
 {
   my ($hash, @a) = @_;
-  my $rc = undef;
-  my $reDOUBLE = '^(\\d+\\.?\\d{0,2})$';
-
-  my ($gterror, $gotToken) = getKeyValue($hash->{NAME}."_accessToken");
 
   return "no set value specified" if(int(@a) < 2);
-  return "LoginNecessary" if($a[1] eq "?" && !defined($gotToken));
-  return "scanCars login logout refreshToken" if($a[1] eq "?");
-  if ($a[1] eq "login") {
-    return TeslaConnection_GetAuthToken($hash,$a[2],$a[3]);
+  return "scanCars connect disconnect refreshAccessToken" if($a[1] eq "?");
+  if ($a[1] eq "connect") {
+    TeslaConnection_Connect($hash, $hash->{NAME});
   }
   if ($a[1] eq "scanCars") {
     TeslaConnection_AutocreateDevices($hash);
   }
-  if ($a[1] eq "refreshToken") {
-    undef $hash->{expires_at};
+  if ($a[1] eq "disconnect") {
+    TeslaConnection_Disconnect($hash, $hash->{NAME});
+  }
+  if ($a[1] eq "refreshAccessToken") {
+    TeslaConnection_clearAccessToken($hash);
     TeslaConnection_RefreshToken($hash);
   }
-  if ($a[1] eq "logout") {
-    setKeyValue($hash->{NAME}."_accessToken",undef);
-    setKeyValue($hash->{NAME}."_refreshToken",undef);
-    undef $hash->{expires_at};
-    $hash->{STATE} = "Login necessary";
-    readingsBeginUpdate($hash);
-    readingsBulkUpdate($hash, "state", $hash->{STATE});
-    readingsEndUpdate($hash, 1);
-  }
+}
+
+sub TeslaConnection_Connect {
+  my ($hash, $name) = @_;
+
+  $hash->{STATE} = "connected";
+  readingsBeginUpdate($hash);
+  readingsBulkUpdate($hash, "state", $hash->{STATE});
+  readingsEndUpdate($hash, 1);
+  Log3 $hash->{NAME}, 4, "$hash->{NAME} Connect to Tesla API" ;
+  TeslaConnection_RefreshToken($hash);
+}
+
+sub TeslaConnection_Disconnect {
+  my ($hash, $name) = @_;
+
+  $hash->{STATE} = "disconnected";
+  readingsBeginUpdate($hash);
+  readingsBulkUpdate($hash, "state", $hash->{STATE});
+  readingsEndUpdate($hash, 1);
+  Log3 $hash->{NAME}, 4, "$hash->{NAME} Disconnect from Tesla API" ;
 }
 
 #####################################
@@ -82,160 +96,89 @@ sub TeslaConnection_Define($$)
 {
   my ($hash, $def) = @_;
   my @a = split("[ \t][ \t]*", $def);
+  my $name   = $a[0];
 
-  my $u = "wrong syntax: define <conn-name> TeslaConnection [client_id] [redirect_uri] [simulator]";
+  my $u = "wrong syntax: define <conn-name> TeslaConnection";
 
-#  return $u if(int(@a) < 4);
-
-  $hash->{api_uri} = "https://owner-api.teslamotors.com";
-
-#  if(int(@a) >= 4) {
-#    $hash->{client_id} = $a[2];
-#    $hash->{redirect_uri} = $a[3];
-#  }
-#  else {
-    $hash->{client_id} = "81527cff06843c8634fdc09e8ac0abefb46ac849f38fe1e431c2ef2106796384";
-    $hash->{client_secret} = "c7257eb71a564034f9419ee651c7d0e5f7aa6bfbd18bafb5c5c033b093bb2fa3";
-#  }
-
-  $hash->{STATE} = "Login necessary";
+  $hash->{api_uri}   = "https://owner-api.teslamotors.com";
+  $hash->{auth_uri}  = "https://auth.tesla.com/oauth2/v3/token";
+  $hash->{client_id} = "ownerapi";
+  $hash->{STATE}     = "Login necessary";
 
   # start with a delayed refresh
-  setKeyValue($hash->{NAME}."_accessToken",undef);
-  InternalTimer(gettimeofday()+10, "TeslaConnection_RefreshToken", $hash, 0);
+  TeslaConnection_clearAccessToken($hash);
+  InternalTimer(gettimeofday()+10, "TeslaConnection_Connect", $hash, 0);
 
   return;
-}
-
-#####################################
-sub TeslaConnection_GetAuthToken
-{
-  my ($hash,$user,$pwd) = @_;
-  my $name = $hash->{NAME};
-  my $JSON = JSON->new->utf8(0)->allow_nonref;
-
-  Log3 $name, 4, "Request oauth code for: $user";
-
-  my($err,$data) = HttpUtils_BlockingGet({
-    url => "$hash->{api_uri}/oauth/token",
-    timeout => 10,
-    noshutdown => 1,
-    data => {
-        grant_type => 'password',
-	client_id => $hash->{client_id},
-	client_secret => $hash->{client_secret},
-	email => $user,
-	password => $pwd
-    }
-  });
-
-  if( $err ) {
-    Log3 $name, 2, "$name http request failed: $err";
-    return $err;
-  } elsif( $data ) {
-    Log3 $name, 2, "$name AuthTokenResponse $data";
-
-    $data =~ s/\n//g;
-    if( $data !~ m/^\{.*}$/m ) {
-      Log3 $name, 2, "$name invalid json detected: >>$data<<";
-      return "Invalid get token response";
-    }
-  }
-
-   my $json = eval {$JSON->decode($data)};
-   if($@){
-     Log3 $hash->{NAME}, 2, "JSON error while reading token response";
-
-   } else {  
-
-    if( $json->{error} ) {
-      $hash->{lastError} = $json->{error};
-    }
-  
-    setKeyValue($hash->{NAME}."_accessToken",$json->{access_token});
-    setKeyValue($hash->{NAME}."_refreshToken", $json->{refresh_token});
-
-    if( $json->{access_token} ) {
-      $hash->{STATE} = "Connected";
-      readingsBeginUpdate($hash);
-      readingsBulkUpdate($hash, "state", $hash->{STATE});
-
-      ($hash->{expires_at}) = gettimeofday();
-      $hash->{expires_at} += $json->{expires_in};
-      $hash->{username} = $user;
-
-      readingsBulkUpdate($hash, "tokenExpiry", scalar localtime $hash->{expires_at});
-      readingsEndUpdate($hash, 1);
-
-      foreach my $key ( keys %defs ) {
-        if (($defs{$key}->{TYPE} eq "TeslaCar") && ($defs{$key}->{teslaconn} eq $hash->{NAME})) {
-          fhem "set $key init";
-        }
-      }
-
-      RemoveInternalTimer($hash);
-      InternalTimer(gettimeofday()+$json->{expires_in}*3/4,
-        "TeslaConnection_RefreshToken", $hash, 0);
-      return undef;
-    }
-  }
-  $hash->{STATE} = "Error";
-  readingsBeginUpdate($hash);
-  readingsBulkUpdate($hash, "state", $hash->{STATE});
-  readingsEndUpdate($hash, 1);
 }
 
 #####################################
 sub TeslaConnection_RefreshToken($)
 {
   my ($hash) = @_;
-  my $name = $hash->{NAME};
-
   my $conn = $hash->{teslaconn};
   if (!defined $conn) {
     $conn = $hash;
-  } else {
+  }
+  else {
     $conn = $defs{$conn};
-  }
 
-  my ($gkerror, $refreshToken) = getKeyValue($conn->{NAME}."_refreshToken");
-  if (!defined $refreshToken) {
-    Log3 $name, 4, "$name: no token to be refreshed";
+  }
+  my $name = $conn->{NAME};
+
+  my $refreshToken = AttrVal($conn->{NAME}, "RefreshToken", "");
+  $refreshToken =~ s/ //g;
+  if ($refreshToken eq "") {
+    Log3 $name, 4, "$name: no refreshToken to get new accessToken";
+    readingsBeginUpdate($conn);
+    readingsBulkUpdate($conn, "state", "refreshToken missing");
+    readingsEndUpdate($conn, 1);
     return undef;
+  } else {
+      Log3 $name, 4 , "$name current refreshToken: " . TeslaConnection_TokenInShort($refreshToken);
   }
 
-  if( defined($conn->{expires_at}) ) {
-    my ($seconds) = gettimeofday();
-    if( $seconds < $conn->{expires_at} - 300 ) {
+  if (defined($conn->{expires_at})) {
+    if (gettimeofday() < $conn->{expires_at} - 300) {
       Log3 $name, 4, "$name: no token refresh needed";
       return undef
     }
   }
 
-  my ($gterror, $gotToken) = getKeyValue($conn->{NAME}."_accessToken");
+  TeslaConnection_clearAccessToken($hash);
 
-  my($err,$data) = HttpUtils_BlockingGet({
-    url => "$conn->{api_uri}/oauth/token",
-    timeout => 10,
-    noshutdown => 1,
-    data => {
-        grant_type => 'refresh_token',
-	client_id => $conn->{client_id},
-	client_secret => $conn->{client_secret},
-	refresh_token => $refreshToken
-    }
-  });
+  my $param = {
+      url         => "$conn->{auth_uri}",
+      timeout     => 10,
+      noshutdown  => 1,
+      httpversion => "1.1",
+      hash        => $conn,
+      callback    => \&TeslaConnection_RefreshToken_Callback,
+      data        => {
+          grant_type    => 'refresh_token',
+          client_id     => $conn->{client_id},
+          refresh_token => $refreshToken
+      }
+  };
+
+  HttpUtils_NonblockingGet($param);
+}
+
+sub TeslaConnection_RefreshToken_Callback {
+  my ($param, $err, $data) = @_;
+  my $hash = $param->{hash};
+  my $name = $hash->{NAME};
+  my $conn = $hash;
 
   if( $err ) {
     Log3 $name, 2, "$name: http request failed: $err";
   } elsif( $data ) {
     Log3 $name, 4, "$name: RefreshTokenResponse $data";
+    $conn->{last_response} = strftime("%F %X", localtime(gettimeofday()));
 
     $data =~ s/\n//g;
-    if( $data !~ m/^\{.*}$/m ) {
-
+    if( $data !~ m/^{.*}$/m ) {
       Log3 $name, 2, "$name: invalid json detected: >>$data<<";
-
     } else {
       my $json = eval {decode_json($data)};
       if($@){
@@ -243,57 +186,56 @@ sub TeslaConnection_RefreshToken($)
       } else {
 
         if( $json->{error} ) {
-          $hash->{lastError} = $json->{error};
+          Log3 $name, 2, "$name JSON Tesla API reported an error within response: " . $json->{error};
         }
-  
-        setKeyValue($conn->{NAME}."_accessToken",  $json->{access_token});
-        setKeyValue($conn->{NAME}."_refreshToken", $json->{refresh_token});
-  
+
         if( $json->{access_token} ) {
-          $conn->{STATE} = "Connected";
-          $conn->{expires_at} = gettimeofday();
-          $conn->{expires_at} += $json->{expires_in};
+          setKeyValue($conn->{NAME}."_accessToken",  $json->{access_token});
+          $conn->{STATE}         = "connected";
+          $conn->{expires_at}    = round(gettimeofday() + $json->{expires_in}, 0);
+          $conn->{accessToken}   = TeslaConnection_TokenInShort($json->{access_token});
+          $conn->{refreshed_at}  = strftime("%F %X", localtime(gettimeofday()));
+          undef $conn->{lastError};
           undef $conn->{refreshFailCount};
           readingsBeginUpdate($conn);
-          readingsBulkUpdate($conn, "tokenExpiry", scalar localtime $conn->{expires_at});
+          readingsBulkUpdate($conn, "tokenExpiry", strftime("%F %X", localtime($conn->{expires_at})));
           readingsBulkUpdate($conn, "state", $conn->{STATE});
           readingsEndUpdate($conn, 1);
-          RemoveInternalTimer($conn);
-          InternalTimer(gettimeofday()+$json->{expires_in}*3/4,
-            "TeslaConnection_RefreshToken", $conn, 0);
-          if (!$gotToken) {
-            foreach my $key ( keys %defs ) {
-              if ($defs{$key}->{TYPE} eq "TeslaCar") {
-                fhem "set $key init";
-              }
+          Log3 $name, 4 , "$name got new accessToken: " . TeslaConnection_TokenInShort($json->{access_token});
+          foreach my $key ( keys %defs ) {
+            if ($defs{$key}->{TYPE} eq "TeslaCar" && $defs{$key}->{teslaconn} eq $conn->{NAME}) {
+              fhem "set $key init";
             }
           }
           return undef;
         }
       }
+      }
     }
-  }
-  
-  $conn->{STATE} = "Refresh Error" ;
 
+  
+  $conn->{STATE}     = "refreshToken invalid" ;
+  $conn->{lastError} = "refreshToken invalid, trying..."; 
   if (defined $conn->{refreshFailCount}) {
     $conn->{refreshFailCount} += 1;
   } else {
     $conn->{refreshFailCount} = 1;
   }
 
-  if ($conn->{refreshFailCount}==10) {
+
+  if ($conn->{refreshFailCount}>=10) {
     Log3 $conn->{NAME}, 2, "$conn->{NAME}: Refreshing token failed too many times, stopping";
-    $conn->{STATE} = "Login necessary";
-    setKeyValue($hash->{NAME}."_refreshToken", undef);
+    $conn->{STATE} = "disconnected";
+    $conn->{lastError} = "refreshToken invalid and stopped after 10 tries.";
+    setKeyValue($conn->{NAME}."_accessToken", undef);
   } else {
     RemoveInternalTimer($conn);
     InternalTimer(gettimeofday()+60, "TeslaConnection_RefreshToken", $conn, 0);
   }
 
-  readingsBeginUpdate($hash);
-  readingsBulkUpdate($hash, "state", $hash->{STATE});
-  readingsEndUpdate($hash, 1);
+  readingsBeginUpdate($conn);
+  readingsBulkUpdate($conn, "state", $conn->{STATE});
+  readingsEndUpdate($conn, 1);
   return undef;
 }
 
@@ -305,22 +247,31 @@ sub TeslaConnection_AutocreateDevices
   #### Read list of vehicles
   my $URL = "/api/1/vehicles";
 
-  my $carJson = TeslaConnection_request($hash,$URL);
-  if (!defined $carJson) {
-    return "Failed to connect to TeslaConnection API, see log for details";
-  }
+  $hash->{dataCallback} = sub {
+    my $carJson = shift;
 
-  my $cars = decode_json ($carJson);
+    Log3 $hash->{NAME}, 5, "car scan response $carJson";
 
-  for (my $i = 0; 1; $i++) {
-    my $car = $cars->{response}[$i];
-    if (!defined $car) { last };
-    if (!defined $defs{$car->{vin}}) {
-      fhem ("define $car->{vin} TeslaCar $hash->{NAME} $car->{vin}");
+    if (!defined $carJson) {
+      return "Failed to connect to TeslaConnection API, see log for details";
     }
-  }
 
-  return undef;
+    my $cars = decode_json ($carJson);
+
+    for (my $i = 0; 1; $i++) {
+      my $car = $cars->{response}[$i];
+      if (!defined $car) { last };
+      if (!defined $defs{$car->{vin}}) {
+        fhem ("define $car->{vin} TeslaCar $hash->{NAME} $car->{vin}");
+      }
+    }
+
+    return undef;
+  };
+
+  Log3 $hash->{NAME}, 3, "start car scan";
+  TeslaConnection_request($hash,$URL);
+
 }
 
 #####################################
@@ -351,41 +302,67 @@ sub TeslaConnection_Get($@)
 sub TeslaConnection_request
 {
   my ($hash, $URL) = @_;
-  my $name = $hash->{NAME};
-
-  my $api_uri = (defined $hash->{teslaconn}) ? $defs{$hash->{teslaconn}}->{api_uri} : $hash->{api_uri};
-
-  $URL = $api_uri . $URL;
-
-  Log3 $name, 4, "$name request: $URL";
-
-  TeslaConnection_RefreshToken($hash);
-
   my $conn = $hash->{teslaconn};
   if (!defined $conn) {
-    $conn = $name;
+    $conn = $hash;
   }
-  my ($gkerror, $token) = getKeyValue($conn."_accessToken");
+  else {
+    $conn = $defs{$conn};
+  }
+  my $name = $conn->{NAME};
+  $URL = $conn->{api_uri} . $URL;
 
-  my $param = {
-    url        => $URL,
-    hash       => $hash,
-    timeout    => 3,
-    noshutdown => 1,
-    header     => { "Accept" => "application/json", "Authorization" => "Bearer $token" }
-  };
-
-  my ($err, $data) = HttpUtils_BlockingGet($param);
-
-  if ($err) {
-    Log3 $name, 2, "$name can't get $URL -- " . $err;
+  if ($conn->{STATE} eq "disconnected") {
+    Log3 $name, 4, "$name request: disconnected";
     return undef;
   }
 
-  Log3 $name, 4 , "$name response: " . $data;
+  Log3 $name, 4, "$name request: $URL";
+  Log3 $name, 5, "$name callback function: $hash->{dataCallback}";
 
-  return $data;
+  TeslaConnection_RefreshToken($hash);
+  my ($gkerror, $token) = getKeyValue($name."_accessToken");
 
+  if (!$token) {
+    Log3 $name, 1, "$name token is undef";
+    return undef;
+  }
+  Log3 $name, 4, "$name request with current accessToken: " . TeslaConnection_TokenInShort($token);
+
+  my $param = {
+    url         => $URL,
+    hash        => $hash,
+    timeout     => 3,
+    noshutdown  => 1,
+    httpversion => "1.1",
+    header      => { "Accept" => "application/json", "Authorization" => "Bearer $token" },
+    callback    => \&TeslaConnection_request_callback,
+  };
+
+  Log3 $name, 5 , "$name request params: " . Dumper($param) . " Error: ". Dumper($gkerror) . " Token: " . Dumper($token);
+  HttpUtils_NonblockingGet($param);
+}
+
+sub TeslaConnection_request_callback {
+  my ($param, $err, $data) = @_;
+  my $name = $param->{hash}->{NAME};
+
+  if ($err) {
+    Log3 $name, 2, "$name can't $param->{URL} -- " . $err;
+    return undef;
+  }
+
+  if ($data ~~ "401 Unauthorized") {
+      Log3 $name, 2, "$name authorization at Tesla API failt with current accessToken";
+    return undef;
+  }
+
+  Log3 $name, 4 , "$name response from Tesla API: " . $data;
+  Log3 $name, 5 , "$name params: " . Dumper($param) . " callback function: " . $param->{hash}->{dataCallback};
+  
+  if ($data && $param->{hash}->{dataCallback}) {
+    $param->{hash}->{dataCallback}->($data);
+  }
 }
 
 #####################################
@@ -409,30 +386,21 @@ sub TeslaConnection_postdatarequest
   my ($gkerror, $token) = getKeyValue($conn."_accessToken");
 
   my $param = {
-    url        => $URL,
-    method     => "POST",
-    hash       => $hash,
-    timeout    => 3,
-    noshutdown => 1,
-    header     => { "Accept" => "application/json",
-                    "Authorization" => "Bearer $token",
-                    "Content-Type" => "application/json"
-                  },
-    data       => $put_data
+    url         => $URL,
+    method      => "POST",
+    hash        => $hash,
+    timeout     => 3,
+    noshutdown  => 1,
+    header      => { "Accept" => "application/json", "Authorization" => "Bearer $token", "Content-Type" => "application/json" },
+    httpversion => "1.1",
+    data        => $put_data,
+    callback    => \&TeslaConnection_request_callback,
   };
 
-  my ($err, $data) = HttpUtils_BlockingGet($param);
-
-  if ($err) {
-    Log3 $name, 1, "$name can't post to $URL -- " . $err;
-    return undef;
-  }
-
-  Log3 $name, 4, "$name POST response: " . $data;
-
-  return $data;
-
+  HttpUtils_NonblockingGet($param);
 }
+
+
 
 #####################################
 sub TeslaConnection_delrequest
@@ -455,25 +423,17 @@ sub TeslaConnection_delrequest
   my ($gkerror, $token) = getKeyValue($conn."_accessToken");
 
   my $param = {
-    url        => $URL,
-    method     => "DELETE",
-    hash       => $hash,
-    timeout    => 3,
-    noshutdown => 1,
-    header     => { "Accept" => "application/json", "Authorization" => "Bearer $token" }
+    url         => $URL,
+    method      => "DELETE",
+    hash        => $hash,
+    timeout     => 3,
+    noshutdown  => 1,
+    httpversion => "1.1",
+    header      => { "Accept" => "application/json", "Authorization" => "Bearer $token" },
+   callback     => \&TeslaConnection_request_callback,
   };
 
-  my ($err, $data) = HttpUtils_BlockingGet($param);
-
-  if ($err) {
-    Log3 $name, 1, "$name can't delete $URL -- " . $err;
-    return undef;
-  }
-
-  Log3 $name, 4, "TeslaConnection DELETE response: " . $data;
-
-  return $data;
-
+  HttpUtils_NonblockingGet($param);
 }
 
 #####################################
@@ -497,26 +457,39 @@ sub TeslaConnection_postrequest
   my ($gkerror, $token) = getKeyValue($conn."_accessToken");
 
   my $param = {
-    url        => $URL,
-    method     => "POST",
-    hash       => $hash,
-    timeout    => 3,
-    noshutdown => 1,
-    header     => { "Accept" => "application/json", "Authorization" => "Bearer $token" }
+    url         => $URL,
+    method      => "POST",
+    hash        => $hash,
+    timeout     => 3,
+    noshutdown  => 1,
+    httpversion => "1.1",
+    header      => { "Accept" => "application/json", "Authorization" => "Bearer $token" },
+    callback    => \&TeslaConnection_request_callback,
   };
 
-  my ($err, $data) = HttpUtils_BlockingGet($param);
-
-  if ($err) {
-    Log3 $name, 1, "$name can't post $URL -- " . $err;
-    return undef;
-  }
-
-  Log3 $name, 4, "TeslaConnection POST response: " . $data;
-
-  return $data;
-
+  HttpUtils_NonblockingGet($param);
 }
+
+sub TeslaConnection_clearAccessToken($) {
+  my ($hash) = @_;
+
+  setKeyValue($hash->{NAME}."_accessToken", undef);
+  undef $hash->{expires_at};
+  undef $hash->{accessToken};
+  undef $hash->{refreshed_at};
+  readingsBeginUpdate($hash);
+  readingsBulkUpdate($hash, "tokenExpiry", "");
+  readingsEndUpdate($hash, 1);
+}
+
+sub TeslaConnection_TokenInShort($) {
+  my ($token) = @_;
+  if (defined $token) {
+    return substr($token, 0, 25) . "..." . substr($token, -25, 25);
+    } else { return undef; }
+}
+
+
 
 1;
 
@@ -529,16 +502,17 @@ sub TeslaConnection_postrequest
   <a name="TeslaConnection_define"></a>
   <h4>Define</h4>
   <ul>
-    <code>define &lt;name&gt; TeslaConnection &lt;api_key&gt; &lt;redirect_url&gt; [simulator]</code>
+    <code>define &lt;name&gt; TeslaConnection</code>
     <br/>
     <br/>
-    Defines a connection and login to Tesla.<br>
+    Defines a connection and to the API of Tesla.<br>
     <br/>
     The following steps are needed:<br/>
     <ul>
       <li>Define the FHEM TeslaConnection device<br/>
       <code>define teslaconn TeslaConnection</code><br/></li>
-      <li>Execute the set login with your tesla account user name and password, e.g. set teslaconn login user pass </li>
+      <li>Add attribute RefreshToken with a token created in a third party app, e.g. "Tesla Token".</li>
+      <li>Execute set connect</li>
       <li>Execute the set scanDevices action to create TeslaCar devices for your vehicles.</li>
     </ul>
   </ul>
@@ -550,16 +524,30 @@ sub TeslaConnection_postrequest
       Start a vehicle scan of the Tesla account. The registered cars will then be created as devices automatically
       in FHEM. The device scan can be started several times and will not duplicate cars.
       </li>
-    <li>refreshToken<br/>
-      Manually refresh the access token. This should be necessary only after internet connection problems.
-      </li>
-    <li>logout<br/>
-      Delete the access token and refresh tokens, and show the login link again.
-      </li>
+    <li>connect<br/>
+      Reads the access token and switches state to connected.
+    </li>
+    <li>disconnect<br/>
+      Delete the access token and refresh tokens.
+    </li>
+    <li>refreshAccessToken<br/>
+      Delete the current accessToken and gets a new one by means of a given refreshTokens.
   </ul>
   <br/>
 
 </ul>
 
+  <a name="TeslaConnection_Attr"></a>
+  <h4>Attributes</h4>
+  <ul>
+        <li><a name="RefreshToken"><code>attr &lt;name&gt; RefreshToken &lt;Token as Text&gt;</code></a>
+                <br />RefreshToken will be uesed to request an new AccessToken from the Tesla API.<br>
+                You have to created a RefreshToken in a third party app, e.g. Tesla Token and store it here.<br>
+                The RefreshToken is only valid for a limited period of time (eg. 6 weeks)<br>
+        </li>
+     </ul>
+</ul>
+
 =end html
 =cut
+

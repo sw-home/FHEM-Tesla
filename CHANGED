@@ -49,3 +49,14 @@ August 17, 2020
 	- Removed streaming support and multiple endpoint support for simplicity's sake
 	- Fixed Perl Warnings
 
+April 17, 2022
+
+	- Oliver Vallant adapted to TESLA's new refresh/accessToken handling
+
+April 20, 2022
+
+	- mahil added charge_amps
+
+April 24, 2022
+
+	- Merge fork by Jaykoert 
