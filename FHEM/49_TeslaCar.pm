@@ -63,7 +63,7 @@ sub TeslaCar_Set($@) {
         $availableCmds = "not connected";
     }
     else {
-        $availableCmds = "init requestSettings wakeUpCar charge_limit_soc startCharging stopCharging charge_amps flashLights honkHorn temperature unlock lock openChargePort startHvacSystem stopHvacSystem startDefrost openTrunk openFrunk";
+        $availableCmds = "init requestSettings wakeUpCar charge_limit_soc startCharging stopCharging charge_amps flashLights honkHorn temperature unlock lock openChargePort closeChargePort startHvacSystem stopHvacSystem startDefrost openTrunk openFrunk";
     }
 
     return "no set value specified" if (int(@a) < 2);
@@ -138,8 +138,12 @@ sub TeslaCar_Set($@) {
     }
     if ($command eq "openChargePort") {
         my $URL = "/api/1/vehicles/$carId/command/charge_port_door_open";
-        $rc = TeslaConnection_postdatarequest($hash, $URL);
+        $rc = TeslaConnection_postdatarequest($hash, $URL);        
     }
+    if ($command eq "closeChargePort") {
+        my $URL = "/api/1/vehicles/$carId/command/charge_port_door_close";
+        $rc = TeslaConnection_postdatarequest($hash, $URL);        
+    }  
     if ($command eq "openFrunk") {
         $rc = TeslaConnection_openTrunk($hash, "front");
     }
@@ -577,6 +581,9 @@ sub TeslaCar_UpdateVehicleCallback($) {
     </li>
     <li>openChargePort<br>
       If the car is in state 'online', you can open the charge port or, if attached, unlock the cable
+    </li>
+    <li>closeChargePort<br>
+      If the car is in state 'online', you can close the charge port or, if attached, unlock the cable
     </li>
     <li>openTrunk<br>
       If the car is in state 'online', you can open the trunk, if opened it will close
