@@ -138,12 +138,12 @@ sub TeslaCar_Set($@) {
     }
     if ($command eq "openChargePort") {
         my $URL = "/api/1/vehicles/$carId/command/charge_port_door_open";
-        $rc = TeslaConnection_postdatarequest($hash, $URL);        
+        $rc = TeslaConnection_postdatarequest($hash, $URL);
     }
     if ($command eq "closeChargePort") {
         my $URL = "/api/1/vehicles/$carId/command/charge_port_door_close";
-        $rc = TeslaConnection_postdatarequest($hash, $URL);        
-    }  
+        $rc = TeslaConnection_postdatarequest($hash, $URL);
+    }
     if ($command eq "openFrunk") {
         $rc = TeslaConnection_openTrunk($hash, "front");
     }
